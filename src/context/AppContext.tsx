@@ -7,6 +7,7 @@ import {
   Installment,
   Payment,
   PaymentMethod,
+  PaymentModality,
   ReversionRequest,
   User,
 } from '../types';
@@ -30,6 +31,12 @@ import {
   permanentDeleteOrSafePurgeClient,
   assignClientsToCollector,
   reassignSingleClient,
+  restoreDatabaseFromBackup,
+  mergeDatabaseWithBackup,
+  importClientsAndCreditsFromExcel,
+  ExcelImportRow,
+  updateClientDetails,
+  updateCreditDetails,
 } from '../services/storage';
 import { useAuth } from './AuthContext';
 import { getElSalvadorDate } from '../utils/dateUtils';
@@ -50,7 +57,8 @@ export type AppView =
   | 'trash'
   | 'popular-credits'
   | 'my-account'
-  | 'collector-history';
+  | 'collector-history'
+  | 'additional-options';
 
 interface FinancialMetrics {
   totalClients: number;
@@ -58,6 +66,7 @@ interface FinancialMetrics {
   totalMoneyLent: number;
   totalMoneyCollected: number;
   totalBalancePending: number;
+  totalPrincipalPending: number;
   totalCollectedToday: number;
   clientsDueTodayCount: number;
   clientsInOverdueCount: number;
@@ -144,6 +153,13 @@ interface AppContextType {
   // Section 2: Asignación y Reasignación de Clientes
   handleAssignClientsToCollector: (collectorId: string, clientIds: string[], reason?: string) => Promise<void>;
   handleReassignSingleClient: (clientId: string, newCollectorId: string, reason?: string) => Promise<void>;
+  // Section 3: Respaldo, Restauración, Fusión y Excel
+  handleRestoreBackup: (backupData: Partial<AppDatabase>, sourceName?: string) => Promise<boolean>;
+  handleMergeBackup: (backupData: Partial<AppDatabase>, sourceName?: string) => Promise<{ addedClients: number; addedCredits: number; addedPayments: number; addedInstallments: number }>;
+  handleImportExcel: (rows: ExcelImportRow[], collectorId?: string) => Promise<{ importedCount: number; errors: string[] }>;
+  // Section 4: Modificación Completa de Expediente (Cliente y Crédito)
+  handleUpdateClientDetails: (clientId: string, data: { fullName: string; dui?: string; phone?: string; address?: string; personalReferences?: string; assignedCollectorId?: string; notes?: string }) => Promise<Client>;
+  handleUpdateCreditDetails: (creditId: string, data: { principal: number; interestRate: number; modality: PaymentModality; totalInstallments: number; installmentAmount?: number; totalAmountToPay?: number; startDate?: string; firstDueDate?: string; assignedCollectorId?: string; notes?: string; status?: 'active' | 'liquidated' | 'overdue' | 'cancelled' }) => Promise<Credit>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -263,8 +279,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return true;
     });
 
+    const clientMap = new Map(database.clients.map(c => [c.id, c]));
+
+    // Créditos Activos (Vigentes) — Excluyen clientes en papelera o archivados
     const activeCredits = database.credits.filter(c => {
       if (c.status !== 'active' && c.status !== 'overdue') return false;
+      const client = clientMap.get(c.clientId);
+      if (!client || client.inTrash || client.isArchived) return false;
       if (isCollectorRestricted && currentUser) {
         return c.assignedCollectorId === currentUser.id;
       }
@@ -273,15 +294,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const liquidatedCredits = database.credits.filter(c => {
       if (c.status !== 'liquidated') return false;
+      const client = clientMap.get(c.clientId);
+      if (!client || client.inTrash || client.isArchived) return false;
       if (isCollectorRestricted && currentUser) {
         return c.assignedCollectorId === currentUser.id;
       }
       return true;
     });
 
-    const totalMoneyLent = database.credits
-      .filter(c => !isCollectorRestricted || c.assignedCollectorId === currentUser?.id)
-      .reduce((acc, c) => acc + c.principal, 0);
+    const operationalCredits = database.credits.filter(c => {
+      const client = clientMap.get(c.clientId);
+      if (!client || client.inTrash || client.isArchived) return false;
+      if (isCollectorRestricted && currentUser) {
+        return c.assignedCollectorId === currentUser.id;
+      }
+      return true;
+    });
+
+    const totalMoneyLent = operationalCredits.reduce((acc, c) => acc + c.principal, 0);
 
     // Sum of valid (non-reversed) payments for the relevant portfolio
     const totalMoneyCollected = database.payments
@@ -289,6 +319,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .reduce((acc, p) => acc + p.receivedAmount, 0);
 
     const totalBalancePending = activeCredits.reduce((acc, c) => acc + c.balancePending, 0);
+
+    // Saldo pendiente sin intereses (Capital puro pendiente)
+    const totalPrincipalPending = Math.round(
+      activeCredits.reduce((acc, c) => {
+        const ratio = c.totalAmountToPay > 0 ? c.principal / c.totalAmountToPay : 1;
+        const principalPart = c.balancePending * ratio;
+        return acc + principalPart;
+      }, 0) * 100
+    ) / 100;
 
     // Money collected today in El Salvador
     const totalCollectedToday = database.payments
@@ -314,6 +353,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalMoneyLent,
       totalMoneyCollected,
       totalBalancePending,
+      totalPrincipalPending,
       totalCollectedToday,
       clientsDueTodayCount: dueTodayClientIds.size,
       clientsInOverdueCount: overdueClientIds.size,
@@ -693,6 +733,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [reloadUsers]
   );
 
+  const handleRestoreBackup = useCallback(
+    async (backupData: Partial<AppDatabase>, sourceName?: string) => {
+      if (!currentUser) throw new Error('Usuario no autenticado.');
+      setSyncStatus('saving');
+      try {
+        const restored = restoreDatabaseFromBackup(backupData, currentUser, sourceName);
+        setDatabase(restored);
+        await reloadUsers();
+        setSyncStatus('synced');
+        return true;
+      } catch (err) {
+        setSyncStatus('synced');
+        throw err;
+      }
+    },
+    [currentUser, reloadUsers]
+  );
+
+  const handleMergeBackup = useCallback(
+    async (backupData: Partial<AppDatabase>, sourceName?: string) => {
+      if (!currentUser) throw new Error('Usuario no autenticado.');
+      setSyncStatus('saving');
+      try {
+        const result = mergeDatabaseWithBackup(backupData, currentUser, sourceName);
+        setDatabase(result.updatedDb);
+        await reloadUsers();
+        setSyncStatus('synced');
+        return result.summary;
+      } catch (err) {
+        setSyncStatus('synced');
+        throw err;
+      }
+    },
+    [currentUser, reloadUsers]
+  );
+
+  const handleImportExcel = useCallback(
+    async (rows: ExcelImportRow[], collectorId?: string) => {
+      if (!currentUser) throw new Error('Usuario no autenticado.');
+      setSyncStatus('saving');
+      try {
+        const result = importClientsAndCreditsFromExcel(database, rows, currentUser, collectorId);
+        setDatabase(result.updatedDb);
+        setSyncStatus('synced');
+        return { importedCount: result.importedCount, errors: result.errors };
+      } catch (err) {
+        setSyncStatus('synced');
+        throw err;
+      }
+    },
+    [currentUser, database]
+  );
+
+  const handleUpdateClientDetails = useCallback(
+    async (clientId: string, data: { fullName: string; dui?: string; phone?: string; address?: string; personalReferences?: string; assignedCollectorId?: string; notes?: string }) => {
+      if (!currentUser) throw new Error('Usuario no autenticado.');
+      setSyncStatus('saving');
+      try {
+        const result = updateClientDetails(database, { clientId, data, currentUser });
+        setDatabase(result.updatedDb);
+        setSyncStatus('synced');
+        return result.client;
+      } catch (err) {
+        setSyncStatus('synced');
+        throw err;
+      }
+    },
+    [currentUser, database]
+  );
+
+  const handleUpdateCreditDetails = useCallback(
+    async (creditId: string, data: { principal: number; interestRate: number; modality: PaymentModality; totalInstallments: number; installmentAmount?: number; totalAmountToPay?: number; startDate?: string; firstDueDate?: string; assignedCollectorId?: string; notes?: string; status?: 'active' | 'liquidated' | 'overdue' | 'cancelled' }) => {
+      if (!currentUser) throw new Error('Usuario no autenticado.');
+      setSyncStatus('saving');
+      try {
+        const result = updateCreditDetails(database, { creditId, data, currentUser });
+        setDatabase(result.updatedDb);
+        setSyncStatus('synced');
+        return result.credit;
+      } catch (err) {
+        setSyncStatus('synced');
+        throw err;
+      }
+    },
+    [currentUser, database]
+  );
+
   return (
     <AppContext.Provider
       value={{
@@ -730,6 +857,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         handlePermanentDeleteOrSafePurge,
         handleAssignClientsToCollector,
         handleReassignSingleClient,
+        handleRestoreBackup,
+        handleMergeBackup,
+        handleImportExcel,
+        handleUpdateClientDetails,
+        handleUpdateCreditDetails,
       }}
     >
       {children}

@@ -88,7 +88,7 @@ export interface AssignmentLog {
 
 export type PaymentModality = 'diario' | 'semanal' | 'quincenal' | 'mensual';
 export type InterestType = 'fijo' | 'simple' | 'sobre_saldo';
-export type CreditStatus = 'active' | 'liquidated' | 'overdue';
+export type CreditStatus = 'active' | 'liquidated' | 'overdue' | 'cancelled';
 
 export interface Credit {
   id: string;

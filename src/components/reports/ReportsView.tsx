@@ -45,8 +45,12 @@ export const ReportsView: React.FC = () => {
     const netCollected = validPayments.reduce((acc, p) => acc + p.receivedAmount, 0);
     const totalReversed = reversedPayments.reduce((acc, p) => acc + p.receivedAmount, 0);
 
-    // Filter credits
+    const clientMap = new Map(database.clients.map(c => [c.id, c]));
+
+    // Filter credits (excluye clientes en papelera)
     const filteredCredits = database.credits.filter(c => {
+      const client = clientMap.get(c.clientId);
+      if (client?.inTrash) return false;
       if (collectorFilter !== 'all' && c.assignedCollectorId !== collectorFilter) return false;
       if (modalityFilter !== 'all' && c.modality !== modalityFilter) return false;
       return true;
@@ -250,7 +254,7 @@ export const ReportsView: React.FC = () => {
             {formatCurrency(reportStats.totalBalancePending, settings.currencySymbol)}
           </div>
           <p className="text-[11px] text-slate-400 mt-1">
-            {reportStats.activeCount} créditos vigentes / {reportStats.liquidatedCount} liquidados
+            {reportStats.activeCount} créditos activos (vigentes) / {reportStats.liquidatedCount} liquidados
           </p>
         </div>
       </div>

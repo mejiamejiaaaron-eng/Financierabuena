@@ -21,6 +21,7 @@ import { TrashView } from './components/trash/TrashView';
 import { CollectorHistoryView } from './components/collector/CollectorHistoryView';
 import { MyAccountView } from './components/collector/MyAccountView';
 import { PopularCreditsView } from './components/credits/PopularCreditsView';
+import { AdditionalOptionsView } from './components/options/AdditionalOptionsView';
 import { CollectorBottomNav } from './components/common/CollectorBottomNav';
 import { AdminCodeViewerModal } from './components/common/AdminCodeViewerModal';
 import { QuickSearchModal } from './components/common/QuickSearchModal';
@@ -105,6 +106,7 @@ const MainAppContent: React.FC = () => {
           {currentView === 'audit' && <AuditView />}
           {currentView === 'trash' && <TrashView />}
           {currentView === 'popular-credits' && <PopularCreditsView />}
+          {currentView === 'additional-options' && <AdditionalOptionsView />}
           {currentView === 'collector-history' && <CollectorHistoryView />}
           {currentView === 'my-account' && (
             <MyAccountView onOpenLogoutModal={() => setIsLogoutModalOpen(true)} />

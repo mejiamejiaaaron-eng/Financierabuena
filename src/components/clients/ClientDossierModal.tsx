@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   User,
@@ -15,12 +15,16 @@ import {
   Printer,
   ShieldCheck,
   Building,
+  Edit3,
+  Save,
+  RotateCcw,
+  Check,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { LoanCalculator, formatCurrency } from '../../utils/financialCalculations';
 import { formatDateDisplay, getElSalvadorDate } from '../../utils/dateUtils';
-import { Credit } from '../../types';
+import { Credit, PaymentModality } from '../../types';
 
 interface Props {
   clientId: string;
@@ -33,7 +37,12 @@ export const ClientDossierModal: React.FC<Props> = ({
   onClose,
   onOpenArchiveModal,
 }) => {
-  const { database, setActiveReceiptModalPayment } = useApp();
+  const {
+    database,
+    setActiveReceiptModalPayment,
+    handleUpdateClientDetails,
+    handleUpdateCreditDetails,
+  } = useApp();
   const { hasPermission, isAdmin } = useAuth();
   const settings = database.settings;
 
@@ -54,12 +63,137 @@ export const ClientDossierModal: React.FC<Props> = ({
     .filter(p => p.creditId === currentCredit?.id)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  // Edit states for Client
+  const [isEditingClient, setIsEditingClient] = useState(false);
+  const [clientForm, setClientForm] = useState({
+    fullName: client?.fullName || '',
+    dui: client?.dui || '',
+    phone: client?.phone || '',
+    address: client?.address || '',
+    personalReferences: client?.personalReferences || '',
+    assignedCollectorId: client?.assignedCollectorId || '',
+    notes: client?.notes || '',
+  });
+
+  // Edit states for Credit
+  const [isEditingCredit, setIsEditingCredit] = useState(false);
+  const [creditForm, setCreditForm] = useState({
+    principal: currentCredit?.principal || 0,
+    interestRate: currentCredit?.interestRate || 20,
+    modality: (currentCredit?.modality || 'diario') as PaymentModality,
+    totalInstallments: currentCredit?.totalInstallments || 24,
+    installmentAmount: currentCredit ? LoanCalculator.getInstallmentAmount(currentCredit) : 0,
+    startDate: currentCredit?.startDate || '',
+    firstDueDate: currentCredit?.firstDueDate || '',
+    status: (currentCredit?.status || 'active') as 'active' | 'liquidated' | 'overdue' | 'cancelled',
+    assignedCollectorId: currentCredit?.assignedCollectorId || '',
+    notes: currentCredit?.notes || '',
+  });
+
+  const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const collectors = database.users.filter(u => u.role === 'collector' || u.role === 'admin');
+
+  useEffect(() => {
+    if (client) {
+      setClientForm({
+        fullName: client.fullName,
+        dui: client.dui || '',
+        phone: client.phone || '',
+        address: client.address || '',
+        personalReferences: client.personalReferences || '',
+        assignedCollectorId: client.assignedCollectorId || '',
+        notes: client.notes || '',
+      });
+    }
+  }, [client]);
+
+  useEffect(() => {
+    if (currentCredit) {
+      setCreditForm({
+        principal: currentCredit.principal,
+        interestRate: currentCredit.interestRate,
+        modality: currentCredit.modality,
+        totalInstallments: currentCredit.totalInstallments,
+        installmentAmount: LoanCalculator.getInstallmentAmount(currentCredit),
+        startDate: currentCredit.startDate,
+        firstDueDate: currentCredit.firstDueDate,
+        status: currentCredit.status,
+        assignedCollectorId: currentCredit.assignedCollectorId,
+        notes: currentCredit.notes || '',
+      });
+    }
+  }, [currentCredit?.id]);
+
   if (!client) return null;
 
   const today = getElSalvadorDate();
 
   const handlePrintDossier = () => {
     window.print();
+  };
+
+  const handleSaveClientChanges = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clientForm.fullName.trim()) {
+      setActionFeedback({ type: 'error', message: 'El nombre completo del cliente es obligatorio.' });
+      return;
+    }
+    try {
+      setIsSubmitting(true);
+      setActionFeedback(null);
+      await handleUpdateClientDetails(client.id, clientForm);
+      setIsEditingClient(false);
+      setActionFeedback({ type: 'success', message: 'Datos del cliente actualizados exitosamente.' });
+      setTimeout(() => setActionFeedback(null), 4000);
+    } catch (err: any) {
+      setActionFeedback({ type: 'error', message: err.message || 'Error al guardar los datos del cliente.' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSaveCreditChanges = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentCredit) return;
+    if (creditForm.principal <= 0) {
+      setActionFeedback({ type: 'error', message: 'El capital debe ser un monto mayor a 0.' });
+      return;
+    }
+    if (creditForm.totalInstallments <= 0) {
+      setActionFeedback({ type: 'error', message: 'El número de cuotas debe ser mayor a 0.' });
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      setActionFeedback(null);
+      const calculatedInterest = (creditForm.principal * creditForm.interestRate) / 100;
+      const totalAmountToPay = creditForm.principal + calculatedInterest;
+
+      await handleUpdateCreditDetails(currentCredit.id, {
+        principal: Number(creditForm.principal),
+        interestRate: Number(creditForm.interestRate),
+        modality: creditForm.modality,
+        totalInstallments: Number(creditForm.totalInstallments),
+        installmentAmount: Number(creditForm.installmentAmount),
+        totalAmountToPay,
+        startDate: creditForm.startDate,
+        firstDueDate: creditForm.firstDueDate,
+        status: creditForm.status,
+        assignedCollectorId: creditForm.assignedCollectorId,
+        notes: creditForm.notes,
+      });
+
+      setIsEditingCredit(false);
+      setActionFeedback({ type: 'success', message: 'Condiciones del crédito actualizadas y cronograma recalculado.' });
+      setTimeout(() => setActionFeedback(null), 4000);
+    } catch (err: any) {
+      setActionFeedback({ type: 'error', message: err.message || 'Error al guardar las condiciones del crédito.' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -108,35 +242,218 @@ export const ClientDossierModal: React.FC<Props> = ({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-6 no-print">
-          {/* Client Personal Info Card */}
-          <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-xs grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div>
-              <span className="text-slate-400 block mb-0.5">Teléfono:</span>
-              <div className="flex items-center gap-1.5 font-bold text-blue-300">
-                <Phone className="w-3.5 h-3.5" />
-                <a href={`tel:${client.phone}`} className="hover:underline">
-                  {client.phone}
-                </a>
+          {/* Action Feedback Banner */}
+          {actionFeedback && (
+            <div
+              className={`p-3 rounded-xl border flex items-center justify-between text-xs font-medium ${
+                actionFeedback.type === 'success'
+                  ? 'bg-emerald-950/70 border-emerald-700/80 text-emerald-300'
+                  : 'bg-rose-950/70 border-rose-700/80 text-rose-300'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {actionFeedback.type === 'success' ? (
+                  <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                )}
+                <span>{actionFeedback.message}</span>
               </div>
+              <button
+                onClick={() => setActionFeedback(null)}
+                className="text-slate-400 hover:text-white ml-2"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Client Personal Info Card / Edit Form */}
+          <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl p-4 text-xs">
+            <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-700/60">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-blue-400" />
+                <span>Datos Generales del Cliente</span>
+              </h3>
+              {!isEditingClient ? (
+                <button
+                  type="button"
+                  onClick={() => setIsEditingClient(true)}
+                  className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-blue-400 hover:text-blue-300 bg-blue-950/50 hover:bg-blue-900/50 border border-blue-800/60 rounded-lg transition cursor-pointer"
+                  title="Modificar nombre, DUI, teléfono, cobrador o dirección"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Modificar Datos</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsEditingClient(false)}
+                  className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-400 hover:text-white bg-slate-700/50 rounded-lg transition cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Cancelar</span>
+                </button>
+              )}
             </div>
 
-            <div>
-              <span className="text-slate-400 block mb-0.5">Cobrador Asignado:</span>
-              <span className="font-semibold text-white">{client.assignedCollectorName}</span>
-            </div>
+            {isEditingClient ? (
+              <form onSubmit={handleSaveClientChanges} className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      Nombre Completo *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={clientForm.fullName}
+                      onChange={e => setClientForm({ ...clientForm, fullName: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
 
-            <div className="sm:col-span-2">
-              <span className="text-slate-400 block mb-0.5">Dirección de Cobro:</span>
-              <div className="flex items-start gap-1.5 font-medium text-slate-200">
-                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                <span>{client.address || 'Sin dirección registrada'}</span>
-              </div>
-            </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      DUI (00000000-0)
+                    </label>
+                    <input
+                      type="text"
+                      value={clientForm.dui}
+                      onChange={e => setClientForm({ ...clientForm, dui: e.target.value })}
+                      placeholder="00000000-0"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
 
-            {client.personalReferences && (
-              <div className="sm:col-span-4 pt-2 border-t border-slate-700/60">
-                <span className="text-slate-400 block mb-0.5">Referencias Personales:</span>
-                <span className="text-slate-300 italic">{client.personalReferences}</span>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      Teléfono
+                    </label>
+                    <input
+                      type="text"
+                      value={clientForm.phone}
+                      onChange={e => setClientForm({ ...clientForm, phone: e.target.value })}
+                      placeholder="7777-8888"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      Cobrador Asignado
+                    </label>
+                    <select
+                      value={clientForm.assignedCollectorId}
+                      onChange={e => setClientForm({ ...clientForm, assignedCollectorId: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="">Sin cobrador asignado</option>
+                      {collectors.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.role === 'admin' ? 'Administrador' : 'Cobrador'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      Dirección de Cobro / Domicilio
+                    </label>
+                    <input
+                      type="text"
+                      value={clientForm.address}
+                      onChange={e => setClientForm({ ...clientForm, address: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      Referencias Personales / Fiadores
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={clientForm.personalReferences}
+                      onChange={e => setClientForm({ ...clientForm, personalReferences: e.target.value })}
+                      placeholder="Nombre, teléfono o relación de fiadores / conocidos..."
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                      Notas del Expediente
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={clientForm.notes}
+                      onChange={e => setClientForm({ ...clientForm, notes: e.target.value })}
+                      placeholder="Observaciones de pago, negocio, horarios de cobro..."
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-700/60">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingClient(false)}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold shadow transition cursor-pointer disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSubmitting ? 'Guardando...' : 'Guardar Cambios del Cliente'}</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Teléfono:</span>
+                  <div className="flex items-center gap-1.5 font-bold text-blue-300">
+                    <Phone className="w-3.5 h-3.5" />
+                    <a href={`tel:${client.phone}`} className="hover:underline">
+                      {client.phone || 'No registrado'}
+                    </a>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-slate-400 block mb-0.5">Cobrador Asignado:</span>
+                  <span className="font-semibold text-white">{client.assignedCollectorName || 'Sin asignar'}</span>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <span className="text-slate-400 block mb-0.5">Dirección de Cobro:</span>
+                  <div className="flex items-start gap-1.5 font-medium text-slate-200">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                    <span>{client.address || 'Sin dirección registrada'}</span>
+                  </div>
+                </div>
+
+                {client.personalReferences && (
+                  <div className="sm:col-span-4 pt-2 border-t border-slate-700/60">
+                    <span className="text-slate-400 block mb-0.5">Referencias Personales:</span>
+                    <span className="text-slate-300 italic">{client.personalReferences}</span>
+                  </div>
+                )}
+
+                {client.notes && (
+                  <div className="sm:col-span-4 pt-2 border-t border-slate-700/60">
+                    <span className="text-slate-400 block mb-0.5">Notas del Cliente:</span>
+                    <span className="text-slate-300">{client.notes}</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -187,7 +504,7 @@ export const ClientDossierModal: React.FC<Props> = ({
                             : 'bg-blue-950 text-blue-300'
                         }`}
                       >
-                        {c.status === 'liquidated' ? 'Liquidado' : c.status === 'overdue' ? 'En Mora' : 'Activo'}
+                        {c.status === 'liquidated' ? 'Liquidado' : c.status === 'overdue' ? 'En Mora' : 'Activo (Vigente)'}
                       </span>
                     </button>
                   );
@@ -199,6 +516,252 @@ export const ClientDossierModal: React.FC<Props> = ({
           {/* Current Credit Details & Summary */}
           {currentCredit && (
             <div className="space-y-4">
+              {/* Credit Header & Edit Trigger */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-emerald-400" />
+                  <span className="text-xs font-bold uppercase text-slate-300 tracking-wider">
+                    Condiciones del Crédito {currentCredit.creditNumber}
+                  </span>
+                </div>
+                {!isEditingCredit ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingCredit(true)}
+                    className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 bg-emerald-950/50 hover:bg-emerald-900/50 border border-emerald-800/60 rounded-lg transition cursor-pointer"
+                    title="Modificar capital, tasa, cuotas, modalidad, fechas o estado del crédito"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>Modificar Crédito</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingCredit(false)}
+                    className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-400 hover:text-white bg-slate-700/50 rounded-lg transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Cancelar</span>
+                  </button>
+                )}
+              </div>
+
+              {isEditingCredit ? (
+                <form
+                  onSubmit={handleSaveCreditChanges}
+                  className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 text-xs space-y-4"
+                >
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Capital Prestado ($) *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="1"
+                        required
+                        value={creditForm.principal}
+                        onChange={e => {
+                          const p = parseFloat(e.target.value) || 0;
+                          const interest = (p * creditForm.interestRate) / 100;
+                          const total = p + interest;
+                          const inst = creditForm.totalInstallments > 0 ? total / creditForm.totalInstallments : 0;
+                          setCreditForm({
+                            ...creditForm,
+                            principal: p,
+                            installmentAmount: Math.round(inst * 100) / 100,
+                          });
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Tasa de Interés (%) *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        required
+                        value={creditForm.interestRate}
+                        onChange={e => {
+                          const rate = parseFloat(e.target.value) || 0;
+                          const interest = (creditForm.principal * rate) / 100;
+                          const total = creditForm.principal + interest;
+                          const inst = creditForm.totalInstallments > 0 ? total / creditForm.totalInstallments : 0;
+                          setCreditForm({
+                            ...creditForm,
+                            interestRate: rate,
+                            installmentAmount: Math.round(inst * 100) / 100,
+                          });
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Modalidad de Pago
+                      </label>
+                      <select
+                        value={creditForm.modality}
+                        onChange={e => setCreditForm({ ...creditForm, modality: e.target.value as PaymentModality })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 capitalize"
+                      >
+                        <option value="diario">Diario</option>
+                        <option value="semanal">Semanal</option>
+                        <option value="quincenal">Quincenal</option>
+                        <option value="mensual">Mensual</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Número de Cuotas *
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={creditForm.totalInstallments}
+                        onChange={e => {
+                          const n = parseInt(e.target.value) || 1;
+                          const interest = (creditForm.principal * creditForm.interestRate) / 100;
+                          const total = creditForm.principal + interest;
+                          const inst = n > 0 ? total / n : 0;
+                          setCreditForm({
+                            ...creditForm,
+                            totalInstallments: n,
+                            installmentAmount: Math.round(inst * 100) / 100,
+                          });
+                        }}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Cuota Periódica ($)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={creditForm.installmentAmount}
+                        onChange={e => setCreditForm({ ...creditForm, installmentAmount: parseFloat(e.target.value) || 0 })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 font-bold text-emerald-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Fecha Entrega
+                      </label>
+                      <input
+                        type="date"
+                        value={creditForm.startDate}
+                        onChange={e => setCreditForm({ ...creditForm, startDate: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Primera Cuota
+                      </label>
+                      <input
+                        type="date"
+                        value={creditForm.firstDueDate}
+                        onChange={e => setCreditForm({ ...creditForm, firstDueDate: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Estado del Crédito
+                      </label>
+                      <select
+                        value={creditForm.status}
+                        onChange={e => setCreditForm({ ...creditForm, status: e.target.value as any })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="active">Activo (Vigente)</option>
+                        <option value="overdue">En Mora</option>
+                        <option value="liquidated">Liquidado (Pagado)</option>
+                        <option value="cancelled">Cancelado / Anulado</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Cobrador Asignado al Crédito
+                      </label>
+                      <select
+                        value={creditForm.assignedCollectorId}
+                        onChange={e => setCreditForm({ ...creditForm, assignedCollectorId: e.target.value })}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="">Mantener cobrador del cliente</option>
+                        {collectors.map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({c.role === 'admin' ? 'Administrador' : 'Cobrador'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Notas del Crédito
+                      </label>
+                      <input
+                        type="text"
+                        value={creditForm.notes}
+                        onChange={e => setCreditForm({ ...creditForm, notes: e.target.value })}
+                        placeholder="Condiciones especiales, reestructuración..."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Recalculation summary preview */}
+                  <div className="bg-slate-950/80 border border-slate-700/60 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 text-slate-300 text-[11px]">
+                    <div>
+                      Capital: <strong className="text-white">${creditForm.principal.toFixed(2)}</strong> + Interés ({creditForm.interestRate}%): <strong className="text-white">${((creditForm.principal * creditForm.interestRate) / 100).toFixed(2)}</strong> = Total: <strong className="text-emerald-400">${(creditForm.principal + (creditForm.principal * creditForm.interestRate) / 100).toFixed(2)}</strong>
+                    </div>
+                    <div>
+                      Ya pagado: <strong className="text-blue-300">${(currentCredit.totalPaid || 0).toFixed(2)}</strong> | Nuevo Saldo Pendiente: <strong className="text-amber-300">${Math.max(0, (creditForm.principal + (creditForm.principal * creditForm.interestRate) / 100) - (currentCredit.totalPaid || 0)).toFixed(2)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-700/60">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingCredit(false)}
+                      className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold transition cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow transition cursor-pointer disabled:opacity-50"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{isSubmitting ? 'Guardando...' : 'Guardar Condiciones del Crédito'}</span>
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+
               <div className="bg-gradient-to-r from-slate-800 to-slate-850 border border-slate-700 rounded-2xl p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center text-xs">
                 <div>
                   <span className="text-slate-400 block text-[11px]">Capital</span>

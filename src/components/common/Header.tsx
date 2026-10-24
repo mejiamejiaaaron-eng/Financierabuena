@@ -44,6 +44,7 @@ export const Header: React.FC<Props> = ({ onToggleSidebar, onOpenLogoutModal, on
     settings: 'Configuración y Publicación',
     audit: 'Auditoría del Sistema',
     'popular-credits': 'Tabla de Créditos Populares',
+    'additional-options': 'Opciones Adicionales (Excel / Respaldo)',
   };
 
   return (

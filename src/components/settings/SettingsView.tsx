@@ -32,6 +32,7 @@ export const SettingsView: React.FC = () => {
     importDatabaseJson,
     handleResetDemo,
     handleClearToCleanState,
+    setCurrentView,
   } = useApp();
   const { currentUser, isAdmin, updateMyPassword } = useAuth();
   const settings = database.settings;
@@ -236,22 +237,44 @@ export const SettingsView: React.FC = () => {
       {activeTab === 'deploy' && (
         <div className="space-y-6">
           {/* Banner Resumen */}
-          <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 border border-blue-700/60 rounded-2xl p-5 md:p-6 text-white shadow-xl">
-            <div className="flex items-center gap-3 mb-2">
+          {/* Banner Resumen */}
+          <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 border border-blue-700/60 rounded-2xl p-5 md:p-6 text-white shadow-xl space-y-4">
+            <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-blue-500/20 border border-blue-400/40 flex items-center justify-center text-blue-300">
                 <Smartphone className="w-6 h-6" />
               </div>
               <div>
                 <h2 className="text-lg font-black">
-                  Cómo tener tu propia URL y abrir la App en Android
+                  Publicar FINANCIERA AARON con tu propia URL en Android
                 </h2>
                 <p className="text-xs text-blue-200">
-                  Despliegue independiente sin Google AI Studio: instala tu propio icono y úsala en tu celular
+                  Sistema independiente sin Google AI Studio: icono propio en pantalla de inicio y funcionamiento a pantalla completa.
                 </p>
               </div>
             </div>
 
-            <div className="mt-4 p-3.5 bg-slate-950/70 rounded-xl border border-blue-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+            {/* Paso 0 Crucial: Proteger los datos actuales */}
+            <div className="p-4 bg-emerald-950/60 border border-emerald-600/50 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="space-y-0.5">
+                <span className="font-bold text-emerald-300 flex items-center gap-1.5 text-sm">
+                  <Shield className="w-4 h-4 text-emerald-400" />
+                  <span>Paso Previo: Proteger y Respaldar tu Trabajo Actual</span>
+                </span>
+                <p className="text-emerald-200/90 text-[11px] leading-relaxed">
+                  Para que al abrir tu nueva URL no comiences desde cero, descarga tu respaldo completo ahora. Luego podrás cargarlo en tu nueva URL con 1 clic.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={exportDatabaseJson}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold shrink-0 transition shadow-md shadow-emerald-900/50 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Descargar Respaldo JSON</span>
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-slate-950/70 rounded-xl border border-blue-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
               <div>
                 <span className="text-slate-400 block text-[11px]">URL actual de previsualización:</span>
                 <span className="font-mono text-blue-300 font-bold select-all break-all">
@@ -259,8 +282,9 @@ export const SettingsView: React.FC = () => {
                 </span>
               </div>
               <button
+                type="button"
                 onClick={handleCopyLink}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold shrink-0 transition"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold shrink-0 transition cursor-pointer"
               >
                 {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copiedUrl ? '¡Copiado!' : 'Copiar URL'}</span>
@@ -276,34 +300,36 @@ export const SettingsView: React.FC = () => {
                 <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs">
                   1
                 </div>
-                <h3>Obtener tu Dominio o URL Pública Propia</h3>
+                <h3>Obtener tu URL Pública Propia (Gratis)</h3>
               </div>
 
               <p className="text-slate-300 leading-relaxed">
-                Para que la app funcione sin depender de AI Studio, puedes publicarla en cualquiera de estos servicios gratuitos en menos de 3 minutos:
+                Elige cualquiera de estos servicios gratuitos para desplegar tu aplicación en minutos:
               </p>
 
               <div className="space-y-2 pt-1">
-                <div className="p-3 bg-slate-900 rounded-xl border border-slate-750">
-                  <div className="flex items-center justify-between font-bold text-white mb-1">
+                <div className="p-3 bg-slate-900 rounded-xl border border-slate-750 space-y-1.5">
+                  <div className="flex items-center justify-between font-bold text-white">
                     <span>Opción A: Vercel (Recomendada y 100% Gratis)</span>
-                    <span className="text-[10px] bg-emerald-950 text-emerald-300 px-2 py-0.2 rounded border border-emerald-800">
+                    <span className="text-[10px] bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded border border-emerald-800">
                       Más Fácil
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    1. Crea una cuenta gratis en <strong>vercel.com</strong>.<br />
-                    2. Importa este proyecto de GitHub o sube la carpeta.<br />
-                    3. Pulsa <strong>&quot;Deploy&quot;</strong>. Vercel te entrega una URL como <code className="text-blue-300">financiera-aaron.vercel.app</code> o puedes vincularle tu propio dominio <code className="text-blue-300">financieraaaron.com</code>.
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    1. Regístrate gratis en <strong>vercel.com</strong>.<br />
+                    2. Conecta tu repositorio de GitHub o sube la carpeta del proyecto.<br />
+                    3. Pulsa <strong>&quot;Deploy&quot;</strong>. Vercel te dará una URL HTTPS rápida como <code className="text-blue-300">financiera-aaron.vercel.app</code> (también puedes conectar tu propio dominio personalizado).
                   </p>
                 </div>
 
-                <div className="p-3 bg-slate-900 rounded-xl border border-slate-750">
-                  <div className="font-bold text-white mb-1">
-                    <span>Opción B: Firebase Hosting o Netlify</span>
+                <div className="p-3 bg-slate-900 rounded-xl border border-slate-750 space-y-1.5">
+                  <div className="font-bold text-white">
+                    <span>Opción B: Netlify (Arrastrar y Soltar)</span>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    Ejecuta <code className="text-slate-200">npm run build</code> y sube la carpeta <code className="text-slate-200">dist</code> a Firebase Hosting (<code className="text-blue-300">firebase deploy</code>) o Netlify Drop.
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    1. Ejecuta el comando de compilación para generar la carpeta <code className="text-blue-300">dist</code>.<br />
+                    2. En <strong>app.netlify.com/drop</strong>, arrastra la carpeta <code className="text-blue-300">dist</code>.<br />
+                    3. Obtendrás de inmediato una URL pública con HTTPS activa.
                   </p>
                 </div>
               </div>
@@ -315,7 +341,7 @@ export const SettingsView: React.FC = () => {
                 <div className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs">
                   2
                 </div>
-                <h3>Instalarla en tu Celular Android (PWA)</h3>
+                <h3>Instalarla en tu Android con Icono Propio</h3>
               </div>
 
               <p className="text-slate-300 leading-relaxed">
@@ -338,9 +364,9 @@ export const SettingsView: React.FC = () => {
                 </div>
 
                 <div className="p-3 bg-emerald-950/40 rounded-xl border border-emerald-800/80 space-y-1">
-                  <span className="font-bold text-emerald-300 block">C. ¡Listo! Icono Propio en tu Celular</span>
+                  <span className="font-bold text-emerald-300 block">C. Restaurar tus Datos y ¡Listo!</span>
                   <p className="text-[11px] text-emerald-200/90 leading-relaxed">
-                    Aparecerá el icono oficial con el escudo de FINANCIERA AARON en tu pantalla de inicio. Se abre a pantalla completa, exactamente como una app nativa descargada de Google Play Store, y almacena tus datos de forma segura.
+                    Aparecerá el icono oficial de FINANCIERA AARON en tu celular. Al abrirlo, inicia sesión, ve a <strong>Configuración → Respaldo</strong> y carga tu archivo JSON descargado en el Paso 0 para tener todos tus datos listos.
                   </p>
                 </div>
               </div>
@@ -496,6 +522,27 @@ export const SettingsView: React.FC = () => {
             <p className="text-slate-400 mt-0.5">
               Descarga una copia completa de tus clientes, préstamos y pagos en formato seguro JSON para nunca perder información.
             </p>
+          </div>
+
+          {/* Banner directo al nuevo menú Opciones Adicionales */}
+          <div className="p-3.5 bg-gradient-to-r from-indigo-950/80 via-purple-950/40 to-slate-900 border border-indigo-500/40 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+            <div>
+              <p className="font-bold text-white flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                <span>¿Deseas subir archivos Excel (.xlsx) o restaurar archivos .txt/.json?</span>
+              </p>
+              <p className="text-[11px] text-slate-300 mt-0.5">
+                Usa el nuevo menú <strong className="text-indigo-300">Opciones Adicionales</strong> con vista previa interactiva, fusión de clientes y plantilla descargable.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCurrentView('additional-options')}
+              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs transition shrink-0 shadow flex items-center justify-center gap-1.5"
+            >
+              <span>Ir a Opciones Adicionales</span>
+              <span>→</span>
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">

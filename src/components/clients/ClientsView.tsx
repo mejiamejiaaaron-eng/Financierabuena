@@ -231,7 +231,7 @@ export const ClientsView: React.FC = () => {
 
             {[
               { id: 'all', label: 'Todos' },
-              { id: 'active', label: 'Activos' },
+              { id: 'active', label: 'Activos / Vigentes' },
               { id: 'up_to_date', label: 'Al día' },
               { id: 'pending', label: 'Con pendientes' },
               { id: 'overdue', label: 'En mora' },

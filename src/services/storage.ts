@@ -6,6 +6,7 @@ import {
   Installment,
   Payment,
   PaymentMethod,
+  PaymentModality,
   ReversionRequest,
   User,
   AssignmentLog,
@@ -1432,4 +1433,637 @@ export function reassignSingleClient(
     reason: params.reason || 'Reasignación operativa de cartera',
   });
 }
+
+/**
+ * Restaurar Base de Datos Completa desde Archivo de Respaldo (.txt / .json)
+ */
+export function restoreDatabaseFromBackup(
+  backupData: Partial<AppDatabase>,
+  currentUser: User,
+  sourceName = 'archivo'
+): AppDatabase {
+  const currentDb = loadDatabase();
+  const now = new Date().toISOString();
+
+  // Asegurar que exista al menos la lista de usuarios o preservar admin
+  const users = Array.isArray(backupData.users) && backupData.users.length > 0
+    ? backupData.users
+    : currentDb.users;
+
+  // Garantizar que el usuario admin no se pierda
+  const hasAdmin = users.some(u => u.email === 'am0360136@gmail.com' || u.role === 'admin');
+  if (!hasAdmin && currentUser.role === 'admin') {
+    users.unshift(currentUser);
+  }
+
+  const clients = Array.isArray(backupData.clients) ? backupData.clients : [];
+  const credits = Array.isArray(backupData.credits) ? backupData.credits : [];
+  const installments = Array.isArray(backupData.installments) ? backupData.installments : [];
+  const payments = Array.isArray(backupData.payments) ? backupData.payments : [];
+  const reversionRequests = Array.isArray(backupData.reversionRequests) ? backupData.reversionRequests : [];
+  const settings = backupData.settings || currentDb.settings;
+  const assignmentLogs = Array.isArray(backupData.assignmentLogs) ? backupData.assignmentLogs : [];
+
+  // Actualizar estados de cuotas respecto a la fecha actual
+  const today = getElSalvadorDate();
+  const refreshedInstallments = installments.map(inst => refreshInstallmentStatus(inst, today));
+
+  const restoredDb: AppDatabase = {
+    users,
+    settings,
+    clients,
+    credits,
+    installments: refreshedInstallments,
+    payments,
+    reversionRequests,
+    assignmentLogs,
+    auditLogs: [
+      {
+        id: `audit-${Date.now()}-restore`,
+        timestamp: now,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'RESTAURACION_COMPLETA_SISTEMA',
+        targetType: 'config',
+        targetId: 'database-restore',
+        details: `${currentUser.name} restableció completamente la información del sistema desde "${sourceName}". Se cargaron ${clients.length} clientes, ${credits.length} créditos y ${payments.length} pagos.`,
+      },
+      ...(Array.isArray(backupData.auditLogs) ? backupData.auditLogs : currentDb.auditLogs),
+    ],
+  };
+
+  saveDatabase(restoredDb);
+  return restoredDb;
+}
+
+/**
+ * Recopilar y Fusionar Base de Datos con Archivo de Respaldo (.txt / .json)
+ */
+export function mergeDatabaseWithBackup(
+  backupData: Partial<AppDatabase>,
+  currentUser: User,
+  sourceName = 'archivo'
+): { updatedDb: AppDatabase; summary: { addedClients: number; addedCredits: number; addedPayments: number; addedInstallments: number } } {
+  const currentDb = loadDatabase();
+  const now = new Date().toISOString();
+
+  let addedClients = 0;
+  let addedCredits = 0;
+  let addedPayments = 0;
+  let addedInstallments = 0;
+
+  // 1. Fusionar Clientes
+  const clientMap = new Map<string, Client>();
+  currentDb.clients.forEach(c => clientMap.set(c.id, c));
+
+  if (Array.isArray(backupData.clients)) {
+    for (const client of backupData.clients) {
+      if (!clientMap.has(client.id)) {
+        // Verificar si existe por DUI o Nombre completo exacto
+        const exists = currentDb.clients.some(
+          c => (client.dui && c.dui && c.dui === client.dui) ||
+               (c.fullName.trim().toLowerCase() === client.fullName.trim().toLowerCase())
+        );
+        if (!exists) {
+          clientMap.set(client.id, client);
+          addedClients++;
+        }
+      }
+    }
+  }
+
+  // 2. Fusionar Créditos
+  const creditMap = new Map<string, Credit>();
+  currentDb.credits.forEach(c => creditMap.set(c.id, c));
+
+  if (Array.isArray(backupData.credits)) {
+    for (const credit of backupData.credits) {
+      if (!creditMap.has(credit.id)) {
+        creditMap.set(credit.id, credit);
+        addedCredits++;
+      }
+    }
+  }
+
+  // 3. Fusionar Cuotas
+  const installmentMap = new Map<string, Installment>();
+  currentDb.installments.forEach(i => installmentMap.set(i.id, i));
+
+  if (Array.isArray(backupData.installments)) {
+    for (const inst of backupData.installments) {
+      if (!installmentMap.has(inst.id)) {
+        installmentMap.set(inst.id, inst);
+        addedInstallments++;
+      }
+    }
+  }
+
+  // 4. Fusionar Pagos
+  const paymentMap = new Map<string, Payment>();
+  currentDb.payments.forEach(p => paymentMap.set(p.id, p));
+
+  if (Array.isArray(backupData.payments)) {
+    for (const payment of backupData.payments) {
+      if (!paymentMap.has(payment.id)) {
+        paymentMap.set(payment.id, payment);
+        addedPayments++;
+      }
+    }
+  }
+
+  // 5. Fusionar Usuarios si hay nuevos
+  const userMap = new Map<string, User>();
+  currentDb.users.forEach(u => userMap.set(u.id, u));
+  if (Array.isArray(backupData.users)) {
+    for (const user of backupData.users) {
+      if (!userMap.has(user.id) && !currentDb.users.some(u => u.email === user.email)) {
+        userMap.set(user.id, user);
+      }
+    }
+  }
+
+  const today = getElSalvadorDate();
+  const mergedInstallments = Array.from(installmentMap.values()).map(inst => refreshInstallmentStatus(inst, today));
+
+  const updatedDb: AppDatabase = {
+    ...currentDb,
+    users: Array.from(userMap.values()),
+    clients: Array.from(clientMap.values()),
+    credits: Array.from(creditMap.values()),
+    installments: mergedInstallments,
+    payments: Array.from(paymentMap.values()),
+    auditLogs: [
+      {
+        id: `audit-${Date.now()}-merge`,
+        timestamp: now,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'RECOPILACION_FUSION_DATOS',
+        targetType: 'config',
+        targetId: 'database-merge',
+        details: `${currentUser.name} recopiló e integró información desde "${sourceName}": +${addedClients} clientes, +${addedCredits} créditos, +${addedPayments} pagos nuevos.`,
+      },
+      ...currentDb.auditLogs,
+    ],
+  };
+
+  saveDatabase(updatedDb);
+  return {
+    updatedDb,
+    summary: { addedClients, addedCredits, addedPayments, addedInstallments },
+  };
+}
+
+export interface ExcelImportRow {
+  fullName: string;
+  dui?: string;
+  phone?: string;
+  address?: string;
+  personalReferences?: string;
+  notes?: string;
+  principal?: number;
+  interestRate?: number;
+  modality?: PaymentModality;
+  totalInstallments?: number;
+  installmentAmount?: number;
+  startDate?: string;
+  firstDueDate?: string;
+  collectorName?: string;
+}
+
+/**
+ * Integrar clientes y créditos procesados desde archivo Excel (.xlsx / .xls / .csv)
+ */
+export function importClientsAndCreditsFromExcel(
+  db: AppDatabase,
+  rows: ExcelImportRow[],
+  currentUser: User,
+  defaultCollectorId?: string
+): { updatedDb: AppDatabase; importedCount: number; errors: string[] } {
+  const now = new Date().toISOString();
+  const today = getElSalvadorDate();
+  const errors: string[] = [];
+  let importedCount = 0;
+
+  const collectors = db.users.filter(u => u.role === 'collector');
+  const defaultCollector = collectors.find(c => c.id === defaultCollectorId) || collectors[0] || currentUser;
+
+  const newClients = [...db.clients];
+  const newCredits = [...db.credits];
+  const newInstallments = [...db.installments];
+
+  // Calcular último número de crédito
+  let lastCreditNum = 1000;
+  db.credits.forEach(c => {
+    const match = c.creditNumber?.match(/CR-(\d+)/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > lastCreditNum) lastCreditNum = num;
+    }
+  });
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowNum = i + 2;
+
+    if (!row.fullName || row.fullName.trim().length < 2) {
+      errors.push(`Fila ${rowNum}: Nombre del cliente vacío o inválido`);
+      continue;
+    }
+
+    const cleanName = row.fullName.trim();
+    const cleanDui = row.dui?.trim() || '';
+    const cleanPhone = row.phone?.trim() || '';
+    const cleanAddress = row.address?.trim() || '';
+    const cleanRef = row.personalReferences?.trim() || '';
+
+    // Buscar si ya existe el cliente
+    let client = newClients.find(
+      c => (cleanDui && c.dui === cleanDui) ||
+           (c.fullName.toLowerCase() === cleanName.toLowerCase())
+    );
+
+    // Asignación de cobrador
+    let assignedCol = defaultCollector;
+    if (row.collectorName?.trim()) {
+      const matched = collectors.find(c =>
+        c.name.toLowerCase().includes(row.collectorName!.toLowerCase()) ||
+        c.username?.toLowerCase() === row.collectorName!.toLowerCase()
+      );
+      if (matched) assignedCol = matched;
+    }
+
+    if (!client) {
+      const clientId = `cli-${Date.now()}-${Math.random().toString(36).substring(2, 6)}-xl`;
+      client = {
+        id: clientId,
+        fullName: cleanName,
+        dui: cleanDui,
+        phone: cleanPhone,
+        address: cleanAddress,
+        personalReferences: cleanRef,
+        assignedCollectorId: assignedCol.id,
+        assignedCollectorName: assignedCol.name,
+        assignedTo: assignedCol.id,
+        assignedAt: now,
+        assignedBy: currentUser.name,
+        registerDate: row.startDate || today,
+        notes: row.notes || 'Importado desde archivo Excel',
+        isArchived: false,
+      };
+      newClients.push(client);
+    }
+
+    // Si tiene datos de crédito
+    const principal = Number(row.principal);
+    if (principal && principal > 0) {
+      lastCreditNum++;
+      const creditNumber = `CR-${lastCreditNum}`;
+      const interestRate = Number(row.interestRate) || 20;
+      const modality = (row.modality?.toLowerCase() as PaymentModality) || 'semanal';
+      const installmentsCount = Number(row.totalInstallments) || 16;
+      const customInstallment = Number(row.installmentAmount) || undefined;
+      const firstDueDate = row.firstDueDate || row.startDate || today;
+
+      const calcResult = LoanCalculator.calculate({
+        principal,
+        interestRate,
+        totalInstallments: installmentsCount,
+        modality,
+        firstDueDate,
+        customInstallmentAmount: customInstallment,
+      });
+
+      const creditId = `cred-${Date.now()}-${Math.random().toString(36).substring(2, 6)}-xl`;
+      const newCredit: Credit = {
+        id: creditId,
+        creditNumber,
+        clientId: client.id,
+        clientName: client.fullName,
+        clientDui: client.dui,
+        clientPhone: client.phone,
+        clientAddress: client.address,
+        principal: calcResult.principal,
+        interestRate: calcResult.interestRate,
+        interestType: 'fijo',
+        totalInterest: calcResult.totalInterest,
+        totalAmountToPay: calcResult.totalAmountToPay,
+        modality,
+        totalInstallments: installmentsCount,
+        installmentAmount: calcResult.installmentAmount,
+        lastInstallmentAmount: calcResult.lastInstallmentAmount,
+        startDate: row.startDate || today,
+        firstDueDate: calcResult.installments[0]?.dueDate || firstDueDate,
+        finalDueDate: calcResult.finalDueDate,
+        status: 'active',
+        balancePending: calcResult.totalAmountToPay,
+        totalPaid: 0,
+        notes: row.notes || 'Crédito integrado desde Excel',
+        assignedCollectorId: assignedCol.id,
+        assignedCollectorName: assignedCol.name,
+        createdAt: now,
+      };
+
+      const creditInstallments: Installment[] = calcResult.installments.map(item => ({
+        id: `inst-${creditId}-${item.installmentNumber}`,
+        creditId,
+        clientId: client.id,
+        installmentNumber: item.installmentNumber,
+        dueDate: item.dueDate,
+        scheduledAmount: item.scheduledAmount,
+        paidAmount: 0,
+        balance: item.scheduledAmount,
+        status: item.dueDate < today ? 'overdue' : 'pending',
+        daysOverdue: 0,
+        isLastInstallment: item.isLastInstallment,
+      }));
+
+      newCredits.push(newCredit);
+      newInstallments.push(...creditInstallments);
+    }
+
+    importedCount++;
+  }
+
+  const updatedDb: AppDatabase = {
+    ...db,
+    clients: newClients,
+    credits: newCredits,
+    installments: newInstallments,
+    auditLogs: [
+      {
+        id: `audit-${Date.now()}-excel`,
+        timestamp: now,
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'IMPORTACION_EXCEL_INTEGRADA',
+        targetType: 'client',
+        targetId: 'excel-import',
+        details: `${currentUser.name} integró ${importedCount} registros desde archivo Excel. Clientes totales: ${newClients.length}, Créditos activos (vigentes): ${newCredits.filter(c => c.status === 'active').length}.`,
+      },
+      ...db.auditLogs,
+    ],
+  };
+
+  saveDatabase(updatedDb);
+  return { updatedDb, importedCount, errors };
+}
+
+/**
+ * Modificar todos los apartados de un cliente desde su expediente
+ */
+export function updateClientDetails(
+  db: AppDatabase,
+  params: {
+    clientId: string;
+    data: {
+      fullName: string;
+      dui?: string;
+      phone?: string;
+      address?: string;
+      personalReferences?: string;
+      assignedCollectorId?: string;
+      notes?: string;
+    };
+    currentUser: User;
+  }
+): { updatedDb: AppDatabase; client: Client } {
+  const { clientId, data, currentUser } = params;
+  const now = new Date().toISOString();
+
+  const clientIdx = db.clients.findIndex(c => c.id === clientId);
+  if (clientIdx === -1) throw new Error('Cliente no encontrado');
+
+  const oldClient = db.clients[clientIdx];
+  const collectors = db.users.filter(u => u.role === 'collector');
+  let collectorName = oldClient.assignedCollectorName;
+  if (data.assignedCollectorId) {
+    const col = collectors.find(u => u.id === data.assignedCollectorId);
+    if (col) collectorName = col.name;
+  }
+
+  const updatedClient: Client = {
+    ...oldClient,
+    fullName: data.fullName.trim() || oldClient.fullName,
+    dui: data.dui !== undefined ? data.dui.trim() : oldClient.dui,
+    phone: data.phone !== undefined ? data.phone.trim() : oldClient.phone,
+    address: data.address !== undefined ? data.address.trim() : oldClient.address,
+    personalReferences: data.personalReferences !== undefined ? data.personalReferences.trim() : oldClient.personalReferences,
+    assignedCollectorId: data.assignedCollectorId || oldClient.assignedCollectorId,
+    assignedCollectorName: collectorName,
+    assignedTo: data.assignedCollectorId || oldClient.assignedTo,
+    notes: data.notes !== undefined ? data.notes.trim() : oldClient.notes,
+    updatedAt: now,
+  };
+
+  // Sincronizar nombre, DUI, teléfono y cobrador en los créditos y pagos del cliente
+  const updatedCredits = db.credits.map(cr => {
+    if (cr.clientId === clientId) {
+      return {
+        ...cr,
+        clientName: updatedClient.fullName,
+        clientDui: updatedClient.dui,
+        clientPhone: updatedClient.phone,
+        clientAddress: updatedClient.address,
+        assignedCollectorId: updatedClient.assignedCollectorId,
+        assignedCollectorName: updatedClient.assignedCollectorName,
+      };
+    }
+    return cr;
+  });
+
+  const updatedPayments = db.payments.map(p => {
+    if (p.clientId === clientId) {
+      return {
+        ...p,
+        clientName: updatedClient.fullName,
+      };
+    }
+    return p;
+  });
+
+  const audit: AuditLog = {
+    id: `audit-${Date.now()}-client-edit`,
+    timestamp: now,
+    userId: currentUser.id,
+    userName: currentUser.name,
+    userRole: currentUser.role,
+    action: 'CLIENTE_MODIFICADO_COMPLETO',
+    targetType: 'client',
+    targetId: clientId,
+    details: `${currentUser.name} modificó los datos personales del cliente "${updatedClient.fullName}".`,
+  };
+
+  const newClients = [...db.clients];
+  newClients[clientIdx] = updatedClient;
+
+  const updatedDb: AppDatabase = {
+    ...db,
+    clients: newClients,
+    credits: updatedCredits,
+    payments: updatedPayments,
+    auditLogs: [audit, ...db.auditLogs],
+  };
+
+  saveDatabase(updatedDb);
+  return { updatedDb, client: updatedClient };
+}
+
+/**
+ * Modificar todos los apartados de un crédito desde el expediente del cliente
+ */
+export function updateCreditDetails(
+  db: AppDatabase,
+  params: {
+    creditId: string;
+    data: {
+      principal: number;
+      interestRate: number;
+      modality: PaymentModality;
+      totalInstallments: number;
+      installmentAmount?: number;
+      totalAmountToPay?: number;
+      startDate?: string;
+      firstDueDate?: string;
+      assignedCollectorId?: string;
+      notes?: string;
+      status?: 'active' | 'liquidated' | 'overdue' | 'cancelled';
+    };
+    currentUser: User;
+  }
+): { updatedDb: AppDatabase; credit: Credit } {
+  const { creditId, data, currentUser } = params;
+  const now = new Date().toISOString();
+  const today = getElSalvadorDate();
+
+  const creditIdx = db.credits.findIndex(c => c.id === creditId);
+  if (creditIdx === -1) throw new Error('Crédito no encontrado');
+
+  const oldCredit = db.credits[creditIdx];
+  const collectors = db.users.filter(u => u.role === 'collector');
+  let collectorName = oldCredit.assignedCollectorName;
+  if (data.assignedCollectorId) {
+    const col = collectors.find(u => u.id === data.assignedCollectorId);
+    if (col) collectorName = col.name;
+  }
+
+  // Recalcular crédito si se alteró capital, tasa, cuotas o modalidad
+  const principal = Number(data.principal) || oldCredit.principal;
+  const interestRate = Number(data.interestRate) || oldCredit.interestRate;
+  const modality = data.modality || oldCredit.modality;
+  const totalInstallments = Number(data.totalInstallments) || oldCredit.totalInstallments;
+  const startDate = data.startDate || oldCredit.startDate;
+  const firstDueDate = data.firstDueDate || oldCredit.firstDueDate;
+
+  const calcResult = LoanCalculator.calculate({
+    principal,
+    interestRate,
+    totalInstallments,
+    modality,
+    firstDueDate,
+    customInstallmentAmount: data.installmentAmount,
+    totalAmountToPay: data.totalAmountToPay,
+  });
+
+  // Mantener el total pagado histórico
+  const totalPaid = oldCredit.totalPaid || 0;
+  const newTotalAmount = calcResult.totalAmountToPay;
+  const newBalancePending = Math.max(0, Math.round((newTotalAmount - totalPaid) * 100) / 100);
+  const newStatus = newBalancePending <= 0.001 ? 'liquidated' : (data.status || oldCredit.status);
+
+  const updatedCredit: Credit = {
+    ...oldCredit,
+    principal: calcResult.principal,
+    interestRate: calcResult.interestRate,
+    totalInterest: calcResult.totalInterest,
+    totalAmountToPay: newTotalAmount,
+    balancePending: newBalancePending,
+    totalPaid,
+    modality,
+    totalInstallments,
+    installmentAmount: calcResult.installmentAmount,
+    lastInstallmentAmount: calcResult.lastInstallmentAmount,
+    startDate,
+    firstDueDate: calcResult.installments[0]?.dueDate || firstDueDate,
+    finalDueDate: calcResult.finalDueDate,
+    status: newStatus,
+    assignedCollectorId: data.assignedCollectorId || oldCredit.assignedCollectorId,
+    assignedCollectorName: collectorName,
+    notes: data.notes !== undefined ? data.notes.trim() : oldCredit.notes,
+  };
+
+  // Regenerar cuotas preservando los pagos ya abonados
+  let remainingPaidToApply = totalPaid;
+
+  const newInstallmentsForCredit: Installment[] = calcResult.installments.map(item => {
+    const scheduled = item.scheduledAmount;
+    let paidForThis = 0;
+
+    if (remainingPaidToApply >= scheduled) {
+      paidForThis = scheduled;
+      remainingPaidToApply = Math.round((remainingPaidToApply - scheduled) * 100) / 100;
+    } else if (remainingPaidToApply > 0) {
+      paidForThis = remainingPaidToApply;
+      remainingPaidToApply = 0;
+    }
+
+    const balance = Math.round((scheduled - paidForThis) * 100) / 100;
+    let status: Installment['status'] = 'pending';
+    if (balance <= 0.001) {
+      status = 'paid';
+    } else if (paidForThis > 0) {
+      status = 'partial';
+    } else if (item.dueDate < today) {
+      status = 'overdue';
+    }
+
+    return {
+      id: `inst-${creditId}-${item.installmentNumber}`,
+      creditId,
+      clientId: oldCredit.clientId,
+      installmentNumber: item.installmentNumber,
+      dueDate: item.dueDate,
+      scheduledAmount: scheduled,
+      paidAmount: paidForThis,
+      balance,
+      status,
+      daysOverdue: 0,
+      isLastInstallment: item.isLastInstallment,
+    };
+  });
+
+  // Reemplazar cuotas de este crédito en la base de datos
+  const otherInstallments = db.installments.filter(i => i.creditId !== creditId);
+  const allInstallments = [...otherInstallments, ...newInstallmentsForCredit];
+
+  const newCredits = [...db.credits];
+  newCredits[creditIdx] = updatedCredit;
+
+  const audit: AuditLog = {
+    id: `audit-${Date.now()}-credit-edit`,
+    timestamp: now,
+    userId: currentUser.id,
+    userName: currentUser.name,
+    userRole: currentUser.role,
+    action: 'CREDITO_MODIFICADO_COMPLETO',
+    targetType: 'credit',
+    targetId: creditId,
+    details: `${currentUser.name} modificó las condiciones del crédito ${updatedCredit.creditNumber} de "${updatedCredit.clientName}". Nuevo capital: $${updatedCredit.principal.toFixed(2)}, Tasa: ${updatedCredit.interestRate}%, ${updatedCredit.totalInstallments} cuotas ${updatedCredit.modality}, Saldo pendiente: $${updatedCredit.balancePending.toFixed(2)}.`,
+  };
+
+  const updatedDb: AppDatabase = {
+    ...db,
+    credits: newCredits,
+    installments: allInstallments,
+    auditLogs: [audit, ...db.auditLogs],
+  };
+
+  saveDatabase(updatedDb);
+  return { updatedDb, credit: updatedCredit };
+}
+
+
 

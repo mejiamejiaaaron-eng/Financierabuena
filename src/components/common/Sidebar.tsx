@@ -18,6 +18,7 @@ import {
   KeyRound,
   Table,
   Search,
+  Layers,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp, AppView } from '../../context/AppContext';
@@ -149,6 +150,14 @@ export const Sidebar: React.FC<Props> = ({
       allowed: true,
       badge: 'Tabla Oficial',
       badgeColor: 'bg-emerald-600 text-white',
+    },
+    {
+      id: 'additional-options',
+      label: 'Opciones Adicionales',
+      icon: Layers,
+      allowed: true,
+      badge: 'Excel / Respaldo',
+      badgeColor: 'bg-indigo-600 text-white',
     },
   ];
 
